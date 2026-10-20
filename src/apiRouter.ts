@@ -7,40 +7,41 @@ import {
   RequestInfoSchema
 } from './validators/schemas';
 import {
-  INITIAL_APPLICATIONS,
-  INITIAL_ORGANIZATIONS,
-  INITIAL_INSPECTIONS,
-  INITIAL_CERTIFICATES,
-  INITIAL_RENEWALS,
-  INITIAL_AUDIT_LOGS
-} from './data/mockData';
-import {
   CertificationApplication,
-  Organization,
   InspectionRecord,
   CertificateRecord,
-  RenewalRecord,
   AuditHistoryEvent,
   ApplicationStatus,
   PERMITTED_STATUS_TRANSITIONS
 } from './types/certification';
+import {
+  isDbConnected,
+  getApplications,
+  getApplicationByIdOrRef,
+  updateApplication,
+  getOrganizations,
+  getOrganizationById,
+  getInspections,
+  getInspectionById,
+  insertInspection,
+  updateInspection,
+  getCertificates,
+  insertCertificate,
+  getRenewals,
+  getAuditLogs,
+  insertAuditLog,
+  insertContactInquiry,
+  resetDatabase
+} from './db';
 
-// In-memory persistent state for API server
-let applications: CertificationApplication[] = JSON.parse(JSON.stringify(INITIAL_APPLICATIONS));
-let organizations: Organization[] = JSON.parse(JSON.stringify(INITIAL_ORGANIZATIONS));
-let inspections: InspectionRecord[] = JSON.parse(JSON.stringify(INITIAL_INSPECTIONS));
-let certificates: CertificateRecord[] = JSON.parse(JSON.stringify(INITIAL_CERTIFICATES));
-let renewals: RenewalRecord[] = JSON.parse(JSON.stringify(INITIAL_RENEWALS));
-let auditLogs: AuditHistoryEvent[] = JSON.parse(JSON.stringify(INITIAL_AUDIT_LOGS));
-
-function addAuditLog(
+async function addAuditLog(
   action: string,
   targetEntity: string,
   targetRef: string,
   details: string,
   actor: string = 'API User (Assessor)',
   role: string = 'System Service'
-): void {
+): Promise<void> {
   const newLog: AuditHistoryEvent = {
     id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
@@ -52,7 +53,7 @@ function addAuditLog(
     details,
     isSimulatedDemoEvent: true
   };
-  auditLogs = [newLog, ...auditLogs];
+  await insertAuditLog(newLog);
 }
 
 function parseJsonBody<T>(req: IncomingMessage): Promise<T> {
@@ -115,6 +116,7 @@ export async function handleApiRequest(
         service: 'HCPT Halal Certification Platform API Gateway',
         version: '2.4.0-enterprise',
         environment: 'standalone-backend',
+        database: isDbConnected() ? 'connected (MongoDB Atlas)' : 'in-memory resilient mode',
         timestamp: new Date().toISOString()
       });
       return true;
@@ -122,6 +124,10 @@ export async function handleApiRequest(
 
     // 2. Dashboard summary
     if (path === '/api/dashboard' && method === 'GET') {
+      const applications = await getApplications();
+      const inspections = await getInspections();
+      const certificates = await getCertificates();
+
       const awaitingReview = applications.filter(
         a =>
           a.status === 'Submitted' ||
@@ -155,27 +161,11 @@ export async function handleApiRequest(
 
     // 3. Applications List & Search
     if (path === '/api/applications' && method === 'GET') {
-      let result = [...applications];
-      const status = query.get('status');
-      const category = query.get('category');
-      const search = query.get('search');
+      const status = query.get('status') || undefined;
+      const category = query.get('category') || undefined;
+      const search = query.get('search') || undefined;
 
-      if (status && status !== 'ALL') {
-        result = result.filter(a => a.status === status);
-      }
-      if (category && category !== 'ALL') {
-        result = result.filter(a => a.category === category);
-      }
-      if (search) {
-        const q = search.toLowerCase();
-        result = result.filter(
-          a =>
-            a.referenceNumber.toLowerCase().includes(q) ||
-            a.organizationName.toLowerCase().includes(q) ||
-            a.facilityName.toLowerCase().includes(q) ||
-            a.products.some(p => p.name.toLowerCase().includes(q))
-        );
-      }
+      const result = await getApplications({ status, category, search });
 
       sendJson(res, 200, {
         applications: result,
@@ -189,7 +179,7 @@ export async function handleApiRequest(
     const appDetailMatch = path.match(/^\/api\/applications\/([^/]+)$/);
     if (appDetailMatch && method === 'GET') {
       const id = appDetailMatch[1];
-      const app = applications.find(a => a.id === id || a.referenceNumber === id);
+      const app = await getApplicationByIdOrRef(id);
       if (!app) {
         sendJson(res, 404, { error: 'Application record not found', id });
         return true;
@@ -212,13 +202,12 @@ export async function handleApiRequest(
         return true;
       }
 
-      const appIndex = applications.findIndex(a => a.id === id || a.referenceNumber === id);
-      if (appIndex === -1) {
+      const current = await getApplicationByIdOrRef(id);
+      if (!current) {
         sendJson(res, 404, { error: 'Application not found' });
         return true;
       }
 
-      const current = applications[appIndex];
       const nextStatus = parsed.data.status as ApplicationStatus;
       const allowed = PERMITTED_STATUS_TRANSITIONS[current.status] || [];
 
@@ -231,18 +220,25 @@ export async function handleApiRequest(
       }
 
       const actor = parsed.data.actor || 'Lead Technical Assessor';
-      current.status = nextStatus;
-      current.lastUpdated = new Date().toISOString().substring(0, 10);
-      current.timeline.unshift({
-        id: `tl-${Date.now()}`,
+      const updatedTimeline = [
+        {
+          id: `tl-${Date.now()}`,
+          status: nextStatus,
+          actor,
+          role: 'Certification Officer',
+          description: parsed.data.reason,
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
+        },
+        ...(current.timeline || [])
+      ];
+
+      const updated = await updateApplication(current.id, {
         status: nextStatus,
-        actor,
-        role: 'Certification Officer',
-        description: parsed.data.reason,
-        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
+        lastUpdated: new Date().toISOString().substring(0, 10),
+        timeline: updatedTimeline
       });
 
-      addAuditLog(
+      await addAuditLog(
         'STATUS_TRANSITION',
         'Application',
         current.referenceNumber,
@@ -253,7 +249,7 @@ export async function handleApiRequest(
       sendJson(res, 200, {
         success: true,
         message: `Application transitioned to ${nextStatus}`,
-        application: current
+        application: updated
       });
       return true;
     }
@@ -269,7 +265,7 @@ export async function handleApiRequest(
         return true;
       }
 
-      const app = applications.find(a => a.id === id || a.referenceNumber === id);
+      const app = await getApplicationByIdOrRef(id);
       if (!app) {
         sendJson(res, 404, { error: 'Application not found' });
         return true;
@@ -283,9 +279,12 @@ export async function handleApiRequest(
         isInternal: parsed.data.isInternal,
         timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
       };
-      app.notes.unshift(note);
 
-      addAuditLog(
+      const updated = await updateApplication(app.id, {
+        notes: [note, ...(app.notes || [])]
+      });
+
+      await addAuditLog(
         'NOTE_RECORDED',
         'Application',
         app.referenceNumber,
@@ -294,7 +293,7 @@ export async function handleApiRequest(
         note.role
       );
 
-      sendJson(res, 201, { success: true, note, application: app });
+      sendJson(res, 201, { success: true, note, application: updated });
       return true;
     }
 
@@ -309,7 +308,7 @@ export async function handleApiRequest(
         return true;
       }
 
-      const app = applications.find(a => a.id === id || a.referenceNumber === id);
+      const app = await getApplicationByIdOrRef(id);
       if (!app) {
         sendJson(res, 404, { error: 'Application not found' });
         return true;
@@ -323,21 +322,29 @@ export async function handleApiRequest(
         requestedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
         status: 'Pending Response' as const
       };
-      app.missingInfoRequests.unshift(rfi);
+
+      const updates: Partial<CertificationApplication> = {
+        missingInfoRequests: [rfi, ...(app.missingInfoRequests || [])]
+      };
 
       if (PERMITTED_STATUS_TRANSITIONS[app.status]?.includes('Awaiting Applicant Information')) {
-        app.status = 'Awaiting Applicant Information';
-        app.timeline.unshift({
-          id: `tl-${Date.now()}`,
-          status: 'Awaiting Applicant Information',
-          actor: parsed.data.requestedBy,
-          role: 'Certification Assessor',
-          description: `RFI Dispatched: ${parsed.data.message}`,
-          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
-        });
+        updates.status = 'Awaiting Applicant Information';
+        updates.timeline = [
+          {
+            id: `tl-${Date.now()}`,
+            status: 'Awaiting Applicant Information',
+            actor: parsed.data.requestedBy,
+            role: 'Certification Assessor',
+            description: `RFI Dispatched: ${parsed.data.message}`,
+            timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
+          },
+          ...(app.timeline || [])
+        ];
       }
 
-      addAuditLog(
+      const updated = await updateApplication(app.id, updates);
+
+      await addAuditLog(
         'RFI_DISPATCHED',
         'Application',
         app.referenceNumber,
@@ -345,12 +352,13 @@ export async function handleApiRequest(
         parsed.data.requestedBy
       );
 
-      sendJson(res, 201, { success: true, rfi, application: app });
+      sendJson(res, 201, { success: true, rfi, application: updated });
       return true;
     }
 
     // 8. Organizations
     if (path === '/api/organizations' && method === 'GET') {
+      const organizations = await getOrganizations();
       sendJson(res, 200, { organizations, total: organizations.length });
       return true;
     }
@@ -358,7 +366,7 @@ export async function handleApiRequest(
     const orgDetailMatch = path.match(/^\/api\/organizations\/([^/]+)$/);
     if (orgDetailMatch && method === 'GET') {
       const id = orgDetailMatch[1];
-      const org = organizations.find(o => o.id === id);
+      const org = await getOrganizationById(id);
       if (!org) {
         sendJson(res, 404, { error: 'Organization not found' });
         return true;
@@ -369,6 +377,7 @@ export async function handleApiRequest(
 
     // 9. Inspections
     if (path === '/api/inspections' && method === 'GET') {
+      const inspections = await getInspections();
       sendJson(res, 200, { inspections, total: inspections.length });
       return true;
     }
@@ -381,7 +390,7 @@ export async function handleApiRequest(
         return true;
       }
 
-      const app = applications.find(a => a.id === parsed.data.applicationId);
+      const app = await getApplicationByIdOrRef(parsed.data.applicationId);
       if (!app) {
         sendJson(res, 404, { error: 'Referenced application does not exist' });
         return true;
@@ -408,23 +417,31 @@ export async function handleApiRequest(
         }))
       };
 
-      inspections = [newInsp, ...inspections];
-      app.inspectionId = newInsp.id;
-      app.assignedInspector = newInsp.assignedInspector;
+      await insertInspection(newInsp);
+
+      const appUpdates: Partial<CertificationApplication> = {
+        inspectionId: newInsp.id,
+        assignedInspector: newInsp.assignedInspector
+      };
 
       if (PERMITTED_STATUS_TRANSITIONS[app.status]?.includes('Inspection Scheduled')) {
-        app.status = 'Inspection Scheduled';
-        app.timeline.unshift({
-          id: `tl-${Date.now()}`,
-          status: 'Inspection Scheduled',
-          actor: 'Operations Dispatch',
-          role: 'Logistics Coordinator',
-          description: `On-site inspection scheduled for ${newInsp.scheduledDate} with ${newInsp.assignedInspector}`,
-          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
-        });
+        appUpdates.status = 'Inspection Scheduled';
+        appUpdates.timeline = [
+          {
+            id: `tl-${Date.now()}`,
+            status: 'Inspection Scheduled',
+            actor: 'Operations Dispatch',
+            role: 'Logistics Coordinator',
+            description: `On-site inspection scheduled for ${newInsp.scheduledDate} with ${newInsp.assignedInspector}`,
+            timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
+          },
+          ...(app.timeline || [])
+        ];
       }
 
-      addAuditLog(
+      await updateApplication(app.id, appUpdates);
+
+      await addAuditLog(
         'INSPECTION_SCHEDULED',
         'Inspection',
         newInsp.inspectionRef,
@@ -441,51 +458,63 @@ export async function handleApiRequest(
     if (inspCompleteMatch && method === 'PATCH') {
       const id = inspCompleteMatch[1];
       const body = await parseJsonBody<any>(req);
-      const insp = inspections.find(i => i.id === id);
+      const insp = await getInspectionById(id);
       if (!insp) {
         sendJson(res, 404, { error: 'Inspection not found' });
         return true;
       }
 
-      insp.status = 'Completed';
-      insp.outcome = body.outcome || 'Compliant / Recommended';
-      insp.findingsSummary = body.findingsSummary || 'All audit criteria verified compliant.';
-      insp.checklist.forEach(c => (c.verified = true));
+      const outcome = body.outcome || 'Compliant / Recommended';
+      const findingsSummary = body.findingsSummary || 'All audit criteria verified compliant.';
+      const updatedChecklist = insp.checklist.map(c => ({ ...c, verified: true }));
 
-      const app = applications.find(a => a.id === insp.applicationId);
+      const updatedInsp = await updateInspection(id, {
+        status: 'Completed',
+        outcome,
+        findingsSummary,
+        checklist: updatedChecklist
+      });
+
+      const app = await getApplicationByIdOrRef(insp.applicationId);
       if (app && PERMITTED_STATUS_TRANSITIONS[app.status]?.includes('Inspection Completed')) {
-        app.status = 'Inspection Completed';
-        app.timeline.unshift({
-          id: `tl-${Date.now()}`,
+        await updateApplication(app.id, {
           status: 'Inspection Completed',
-          actor: insp.assignedInspector,
-          role: 'Lead Auditor',
-          description: `Field audit completed: ${insp.outcome}`,
-          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
+          timeline: [
+            {
+              id: `tl-${Date.now()}`,
+              status: 'Inspection Completed',
+              actor: insp.assignedInspector,
+              role: 'Lead Auditor',
+              description: `Field audit completed: ${outcome}`,
+              timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
+            },
+            ...(app.timeline || [])
+          ]
         });
       }
 
-      addAuditLog(
+      await addAuditLog(
         'INSPECTION_COMPLETED',
         'Inspection',
         insp.inspectionRef,
-        `Audit completed with outcome: ${insp.outcome}`,
+        `Audit completed with outcome: ${outcome}`,
         insp.assignedInspector
       );
 
-      sendJson(res, 200, { success: true, inspection: insp });
+      sendJson(res, 200, { success: true, inspection: updatedInsp });
       return true;
     }
 
     // 11. Certificates
     if (path === '/api/certificates' && method === 'GET') {
+      const certificates = await getCertificates();
       sendJson(res, 200, { certificates, total: certificates.length });
       return true;
     }
 
     if (path === '/api/certificates/issue' && method === 'POST') {
       const body = await parseJsonBody<any>(req);
-      const app = applications.find(a => a.id === body.applicationId);
+      const app = await getApplicationByIdOrRef(body.applicationId);
       if (!app) {
         sendJson(res, 404, { error: 'Application not found' });
         return true;
@@ -524,19 +553,25 @@ export async function handleApiRequest(
         ]
       };
 
-      certificates = [newCert, ...certificates];
-      app.status = 'Certificate Issued';
-      app.certificateId = newCert.id;
-      app.timeline.unshift({
-        id: `tl-${Date.now()}`,
+      await insertCertificate(newCert);
+
+      await updateApplication(app.id, {
         status: 'Certificate Issued',
-        actor: 'Certification Directorate',
-        role: 'Director General',
-        description: `Certificate ${certNum} generated and cryptographically sealed.`,
-        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
+        certificateId: newCert.id,
+        timeline: [
+          {
+            id: `tl-${Date.now()}`,
+            status: 'Certificate Issued',
+            actor: 'Certification Directorate',
+            role: 'Director General',
+            description: `Certificate ${certNum} generated and cryptographically sealed.`,
+            timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
+          },
+          ...(app.timeline || [])
+        ]
       });
 
-      addAuditLog(
+      await addAuditLog(
         'CERTIFICATE_ISSUED',
         'Certificate',
         certNum,
@@ -550,12 +585,14 @@ export async function handleApiRequest(
 
     // 12. Renewals
     if (path === '/api/renewals' && method === 'GET') {
+      const renewals = await getRenewals();
       sendJson(res, 200, { renewals, total: renewals.length });
       return true;
     }
 
     // 13. Audit History
     if (path === '/api/audit-history' && method === 'GET') {
+      const auditLogs = await getAuditLogs();
       sendJson(res, 200, { auditLogs, total: auditLogs.length });
       return true;
     }
@@ -570,7 +607,12 @@ export async function handleApiRequest(
       }
 
       const confirmationId = `HCPT-INQ-${Math.floor(100000 + Math.random() * 900000)}`;
-      addAuditLog(
+      await insertContactInquiry({
+        confirmationId,
+        ...parsed.data
+      });
+
+      await addAuditLog(
         'CONTACT_INQUIRY_RECEIVED',
         'Inquiry',
         confirmationId,
@@ -589,14 +631,8 @@ export async function handleApiRequest(
 
     // 15. Reset Store
     if (path === '/api/reset' && method === 'POST') {
-      applications = JSON.parse(JSON.stringify(INITIAL_APPLICATIONS));
-      organizations = JSON.parse(JSON.stringify(INITIAL_ORGANIZATIONS));
-      inspections = JSON.parse(JSON.stringify(INITIAL_INSPECTIONS));
-      certificates = JSON.parse(JSON.stringify(INITIAL_CERTIFICATES));
-      renewals = JSON.parse(JSON.stringify(INITIAL_RENEWALS));
-      auditLogs = JSON.parse(JSON.stringify(INITIAL_AUDIT_LOGS));
-
-      sendJson(res, 200, { success: true, message: 'Platform demo data reset to initial baseline.' });
+      await resetDatabase();
+      sendJson(res, 200, { success: true, message: 'Platform demo data reset to initial baseline in MongoDB Atlas.' });
       return true;
     }
 

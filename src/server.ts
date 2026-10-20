@@ -1,7 +1,13 @@
 import http from 'http';
 import { handleApiRequest } from './apiRouter';
+import { initDb } from './db';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 4000;
+
+// Initialize MongoDB Atlas connection
+initDb().catch(err => {
+  console.error('[Server] MongoDB initialization warning:', err.message);
+});
 
 const server = http.createServer(async (req, res) => {
   // CORS Preflight headers
