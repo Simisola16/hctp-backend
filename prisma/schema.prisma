@@ -1,0 +1,287 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  APPLICANT_QA
+  LEAD_ASSESSOR
+  TECHNICAL_ASSESSOR
+  FIELD_INSPECTOR
+  SHARIAH_SCHOLAR
+  CERTIFICATION_DIRECTOR
+  SYSTEM_ADMIN
+}
+
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  INITIAL_REVIEW
+  AWAITING_APPLICANT_INFO
+  TECHNICAL_REVIEW
+  INSPECTION_SCHEDULED
+  INSPECTION_COMPLETED
+  DECISION_PENDING
+  APPROVED
+  REJECTED
+  CERTIFICATE_ISSUED
+  RENEWAL_DUE
+  CLOSED
+}
+
+enum DocumentCategory {
+  INGREDIENT_TRACEABILITY
+  LAB_ANALYSIS
+  PROCESS_FLOWCHART
+  HACCP_QUALITY_MANUAL
+  HALAL_ASSURANCE_PLAN
+  FACILITY_FLOORPLAN
+  COMMERCIAL_REGISTRATION
+}
+
+enum DocumentReviewStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  NEEDS_REVISION
+  REJECTED
+}
+
+enum InspectionStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  REPORT_SUBMITTED
+  FOLLOW_UP_REQUIRED
+}
+
+enum InspectionOutcome {
+  COMPLIANT
+  CONDITIONAL_CONFORMANCE
+  NON_COMPLIANT
+}
+
+enum CertificateStatus {
+  ACTIVE
+  APPROACHING_EXPIRY
+  RENEWAL_IN_PROGRESS
+  EXPIRED
+  SUSPENDED
+  REVOKED
+}
+
+model User {
+  id             String         @id @default(uuid())
+  email          String         @unique
+  fullName       String
+  hashedPassword String
+  role           Role           @default(APPLICANT_QA)
+  organizationId String?
+  organization   Organization?  @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  reviews        Review[]
+  inspections    Inspection[]
+  auditEvents    AuditEvent[]
+
+  @@index([email])
+}
+
+model Organization {
+  id                  String         @id @default(uuid())
+  name                String
+  legalEntityNumber   String         @unique
+  industry            String
+  country             String
+  city                String
+  website             String?
+  primaryContactName  String
+  primaryContactEmail String
+  primaryContactPhone String
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  facilities          Facility[]
+  applications        Application[]
+  certificates        Certificate[]
+  users               User[]
+  renewals            Renewal[]
+
+  @@index([name])
+}
+
+model Facility {
+  id                   String        @id @default(uuid())
+  organizationId       String
+  organization         Organization  @relation(fields: [organizationId], references: [id])
+  name                 String
+  address              String
+  city                 String
+  country              String
+  facilityType         String
+  totalProductionLines Int           @default(1)
+  lastAuditDate        DateTime?
+  applications         Application[]
+  certificates         Certificate[]
+  inspections          Inspection[]
+}
+
+model Application {
+  id                 String                     @id @default(uuid())
+  referenceNumber    String                     @unique
+  organizationId     String
+  organization       Organization               @relation(fields: [organizationId], references: [id])
+  facilityId         String
+  facility           Facility                   @relation(fields: [facilityId], references: [id])
+  applicationType    String
+  category           String
+  standardsApplied   String[]
+  status             ApplicationStatus          @default(SUBMITTED)
+  submissionDate     DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+  statusHistory      ApplicationStatusHistory[]
+  documents          Document[]
+  reviews            Review[]
+  inspections        Inspection[]
+  complianceDecision CertificationDecision?
+  certificate        Certificate?
+  notes              ApplicationNote[]
+
+  @@index([referenceNumber])
+  @@index([status])
+}
+
+model ApplicationStatusHistory {
+  id            String            @id @default(uuid())
+  applicationId String
+  application   Application       @relation(fields: [applicationId], references: [id])
+  fromStatus    ApplicationStatus
+  toStatus      ApplicationStatus
+  actorName     String
+  reason        String
+  timestamp     DateTime          @default(now())
+}
+
+model Document {
+  id            String               @id @default(uuid())
+  applicationId String
+  application   Application          @relation(fields: [applicationId], references: [id])
+  name          String
+  category      DocumentCategory
+  fileName      String
+  fileSize      String
+  storageUrl    String
+  version       String               @default("v1.0")
+  status        DocumentReviewStatus @default(PENDING)
+  reviewNotes   String?
+  uploadedAt    DateTime             @default(now())
+}
+
+model Review {
+  id            String      @id @default(uuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id])
+  reviewerId    String
+  reviewer      User        @relation(fields: [reviewerId], references: [id])
+  stage         String
+  decision      String
+  comments      String
+  createdAt     DateTime    @default(now())
+}
+
+model Inspection {
+  id                 String             @id @default(uuid())
+  inspectionRef      String             @unique
+  applicationId      String
+  application        Application        @relation(fields: [applicationId], references: [id])
+  facilityId         String
+  facility           Facility           @relation(fields: [facilityId], references: [id])
+  inspectorId        String
+  inspector          User               @relation(fields: [inspectorId], references: [id])
+  scheduledDate      DateTime
+  status             InspectionStatus   @default(SCHEDULED)
+  outcome            InspectionOutcome?
+  checklistData      Json
+  findingsSummary    String?
+  followUpActions    String[]
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+}
+
+model CertificationDecision {
+  id            String      @id @default(uuid())
+  applicationId String      @unique
+  application   Application @relation(fields: [applicationId], references: [id])
+  decision      String
+  decidedBy     String
+  justification String
+  decidedAt     DateTime    @default(now())
+}
+
+model Certificate {
+  id                   String            @id @default(uuid())
+  certificateNumber    String            @unique
+  applicationId        String            @unique
+  application          Application       @relation(fields: [applicationId], references: [id])
+  organizationId       String
+  organization         Organization      @relation(fields: [organizationId], references: [id])
+  facilityId           String
+  facility             Facility          @relation(fields: [facilityId], references: [id])
+  jurisdiction         String
+  standard             String
+  scope                String
+  certifiedProducts    String[]
+  issueDate            DateTime
+  expiryDate           DateTime
+  status               CertificateStatus @default(ACTIVE)
+  sha256Digest         String
+  digitalSignature     String
+  verificationHash     String            @unique
+  createdAt            DateTime          @default(now())
+  renewals             Renewal[]
+
+  @@index([certificateNumber])
+}
+
+model Renewal {
+  id                      String        @id @default(uuid())
+  certificateId           String
+  certificate             Certificate   @relation(fields: [certificateId], references: [id])
+  organizationId          String
+  organization            Organization  @relation(fields: [organizationId], references: [id])
+  currentExpiryDate       DateTime
+  status                  String
+  outstandingRequirements String[]
+  lastNoticeSent          DateTime?
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+}
+
+model ApplicationNote {
+  id            String      @id @default(uuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id])
+  authorName    String
+  authorRole    String
+  content       String
+  isInternal    Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+}
+
+model AuditEvent {
+  id           String   @id @default(uuid())
+  actorId      String?
+  actor        User?    @relation(fields: [actorId], references: [id])
+  actorName    String
+  action       String
+  targetEntity String
+  targetRef    String
+  details      String
+  timestamp    DateTime @default(now())
+
+  @@index([timestamp])
+  @@index([targetRef])
+}
