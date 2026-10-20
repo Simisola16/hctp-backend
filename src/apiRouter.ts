@@ -110,7 +110,7 @@ export async function handleApiRequest(
 
   try {
     // 1. Health
-    if (path === '/api/health' && method === 'GET') {
+    if (path === '/api/health' && (method === 'GET' || method === 'HEAD')) {
       sendJson(res, 200, {
         status: 'healthy',
         service: 'HCPT Halal Certification Platform API Gateway',
