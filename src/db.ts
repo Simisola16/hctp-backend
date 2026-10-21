@@ -31,7 +31,50 @@ let fallbackInspections: InspectionRecord[] = JSON.parse(JSON.stringify(INITIAL_
 let fallbackCertificates: CertificateRecord[] = JSON.parse(JSON.stringify(INITIAL_CERTIFICATES));
 let fallbackRenewals: RenewalRecord[] = JSON.parse(JSON.stringify(INITIAL_RENEWALS));
 let fallbackAuditLogs: AuditHistoryEvent[] = JSON.parse(JSON.stringify(INITIAL_AUDIT_LOGS));
-let fallbackInquiries: any[] = [];
+
+const INITIAL_INQUIRIES: any[] = [
+  {
+    confirmationId: 'HCPT-INQ-849102',
+    fullName: 'Dr. Tariq Al-Hashimi',
+    organizationName: 'Gulf Halal Standards Authority',
+    officialEmail: 'tariq.hashimi@ghsa.gov.ae',
+    phoneNumber: '+971 4 398 2210',
+    jurisdiction: 'United Arab Emirates / GCC',
+    currentSystem: 'Legacy bespoke database with manual PDF handling',
+    annualCertificates: '5,000 - 25,000 certificates/year',
+    inquiryDetails: 'Seeking sovereign cloud deployment to transition our national halal assessment network from paper-based audit checklists to cryptographically verifiable QR digital credentials with GSO 2055-1 compliance.',
+    status: 'NEW',
+    receivedAt: '2026-10-21 14:15:00 UTC'
+  },
+  {
+    confirmationId: 'HCPT-INQ-631249',
+    fullName: 'Hajjah Noor Aminah binti Razak',
+    organizationName: 'ASEAN Halal Assurance Consortium',
+    officialEmail: 'n.aminah@asean-halal.org',
+    phoneNumber: '+60 3 8886 4500',
+    jurisdiction: 'Malaysia / ASEAN (JAKIM)',
+    currentSystem: 'Multi-system hybrid with manual spreadsheet reconciliation',
+    annualCertificates: '25,000+ certificates/year',
+    inquiryDetails: 'Evaluating technical review workflow engine for multinational food manufacturing audits across 14 export corridors. Need automated ingredient biochemical cross-matching and laboratory test result ingest.',
+    status: 'IN_REVIEW',
+    receivedAt: '2026-10-20 09:30:00 UTC'
+  },
+  {
+    confirmationId: 'HCPT-INQ-492715',
+    fullName: 'Marc Van Der Berg',
+    organizationName: 'European Halal Certification Council (EHCC)',
+    officialEmail: 'm.vanderberg@ehcc-eu.com',
+    phoneNumber: '+31 20 894 3320',
+    jurisdiction: 'European Union / UK',
+    currentSystem: 'Custom internal ERP without digital certificate verification',
+    annualCertificates: '1,000 - 5,000 certificates/year',
+    inquiryDetails: 'Urgent requirement to modernize slaughterhouse audit reporting and issue tamper-proof digital certificates recognized by GCC and BPJPH authorities for EU meat exporters.',
+    status: 'CONTACTED',
+    receivedAt: '2026-10-19 16:45:00 UTC'
+  }
+];
+
+let fallbackInquiries: any[] = JSON.parse(JSON.stringify(INITIAL_INQUIRIES));
 
 export async function initDb(): Promise<void> {
   if (isConnected && db) return;
@@ -294,14 +337,43 @@ export async function insertAuditLog(log: AuditHistoryEvent): Promise<void> {
   fallbackAuditLogs = [log, ...fallbackAuditLogs];
 }
 
-export async function insertContactInquiry(inquiry: any): Promise<void> {
+export async function getContactInquiries(): Promise<any[]> {
   if (db && isConnected) {
-    await db.collection('contact_inquiries').insertOne({
-      ...inquiry,
-      receivedAt: new Date().toISOString()
-    });
+    const list = await db.collection('contact_inquiries')
+      .find({}, { projection: { _id: 0 } })
+      .sort({ receivedAt: -1 })
+      .toArray();
+    if (list && list.length > 0) return list;
   }
-  fallbackInquiries = [inquiry, ...fallbackInquiries];
+  return fallbackInquiries;
+}
+
+export async function insertContactInquiry(inquiry: any): Promise<void> {
+  const record = {
+    ...inquiry,
+    status: inquiry.status || 'NEW',
+    receivedAt: inquiry.receivedAt || new Date().toISOString()
+  };
+  if (db && isConnected) {
+    await db.collection('contact_inquiries').insertOne(record);
+  }
+  fallbackInquiries = [record, ...fallbackInquiries];
+}
+
+export async function updateContactInquiryStatus(confirmationId: string, status: string): Promise<boolean> {
+  if (db && isConnected) {
+    await db.collection('contact_inquiries').updateOne(
+      { confirmationId },
+      { $set: { status, updatedAt: new Date().toISOString() } }
+    );
+  }
+  const item = fallbackInquiries.find(i => i.confirmationId === confirmationId);
+  if (item) {
+    item.status = status;
+    item.updatedAt = new Date().toISOString();
+    return true;
+  }
+  return false;
 }
 
 export async function resetDatabase(): Promise<void> {
@@ -314,4 +386,5 @@ export async function resetDatabase(): Promise<void> {
   fallbackCertificates = JSON.parse(JSON.stringify(INITIAL_CERTIFICATES));
   fallbackRenewals = JSON.parse(JSON.stringify(INITIAL_RENEWALS));
   fallbackAuditLogs = JSON.parse(JSON.stringify(INITIAL_AUDIT_LOGS));
+  fallbackInquiries = JSON.parse(JSON.stringify(INITIAL_INQUIRIES));
 }

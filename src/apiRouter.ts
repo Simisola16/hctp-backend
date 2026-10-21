@@ -30,9 +30,12 @@ import {
   getRenewals,
   getAuditLogs,
   insertAuditLog,
+  getContactInquiries,
   insertContactInquiry,
+  updateContactInquiryStatus,
   resetDatabase
 } from './db';
+import { sendEngagementNotification } from './emailService';
 
 async function addAuditLog(
   action: string,
@@ -607,10 +610,14 @@ export async function handleApiRequest(
       }
 
       const confirmationId = `HCPT-INQ-${Math.floor(100000 + Math.random() * 900000)}`;
-      await insertContactInquiry({
+      const inquiryRecord = {
         confirmationId,
-        ...parsed.data
-      });
+        ...parsed.data,
+        status: 'NEW',
+        receivedAt: new Date().toISOString()
+      };
+
+      await insertContactInquiry(inquiryRecord);
 
       await addAuditLog(
         'CONTACT_INQUIRY_RECEIVED',
@@ -621,11 +628,39 @@ export async function handleApiRequest(
         'Prospective Client'
       );
 
+      // Dispatch Resend notification email asynchronously to villagecoders7@gmail.com
+      const emailResult = await sendEngagementNotification(inquiryRecord);
+
       sendJson(res, 201, {
         success: true,
         confirmationId,
+        emailDispatched: emailResult.success,
         message: 'Your inquiry has been logged in the HCPT enterprise consultation pipeline.'
       });
+      return true;
+    }
+
+    // 14b. Get All Contact Inquiries (Admin Portal)
+    if ((path === '/api/contact' || path === '/api/admin/inquiries') && method === 'GET') {
+      const inquiries = await getContactInquiries();
+      sendJson(res, 200, inquiries);
+      return true;
+    }
+
+    // 14c. Update Contact Inquiry Status (Admin Portal)
+    if (path.startsWith('/api/admin/inquiries/') && method === 'PATCH') {
+      const confirmationId = path.replace('/api/admin/inquiries/', '').trim();
+      const body = await parseJsonBody<{ status?: string }>(req);
+      if (!body.status) {
+        sendJson(res, 400, { error: 'Missing status field' });
+        return true;
+      }
+      const updated = await updateContactInquiryStatus(confirmationId, body.status);
+      if (!updated) {
+        sendJson(res, 404, { error: 'Inquiry not found', confirmationId });
+        return true;
+      }
+      sendJson(res, 200, { success: true, confirmationId, status: body.status });
       return true;
     }
 
