@@ -33,6 +33,8 @@ import {
   getContactInquiries,
   insertContactInquiry,
   updateContactInquiryStatus,
+  getVisitorLocations,
+  recordVisitorLocation,
   resetDatabase
 } from './db';
 import { sendEngagementNotification } from './emailService';
@@ -661,6 +663,35 @@ export async function handleApiRequest(
         return true;
       }
       sendJson(res, 200, { success: true, confirmationId, status: body.status });
+      return true;
+    }
+
+    // 14d. Get Visitor Locations (Admin Portal)
+    if ((path === '/api/visitors/locations' || path === '/api/admin/visitor-locations') && method === 'GET') {
+      const locations = await getVisitorLocations();
+      sendJson(res, 200, locations);
+      return true;
+    }
+
+    // 14e. Record Visitor Location (Logged automatically on website visits)
+    if ((path === '/api/visitors/location' || path === '/api/visitors') && method === 'POST') {
+      const body = await parseJsonBody<{
+        city?: string;
+        region?: string;
+        country?: string;
+        countryCode?: string;
+        flag?: string;
+      }>(req);
+
+      const recorded = await recordVisitorLocation({
+        city: body.city || 'Unknown City',
+        region: body.region || '',
+        country: body.country || 'Unknown Country',
+        countryCode: body.countryCode || 'UN',
+        flag: body.flag || '🌐'
+      });
+
+      sendJson(res, 201, { success: true, location: recorded });
       return true;
     }
 

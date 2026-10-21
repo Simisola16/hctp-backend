@@ -376,6 +376,150 @@ export async function updateContactInquiryStatus(confirmationId: string, status:
   return false;
 }
 
+export interface VisitorLocationRecord {
+  id: string;
+  city: string;
+  region: string;
+  country: string;
+  countryCode: string;
+  flag: string;
+  timestamp: string;
+}
+
+const INITIAL_VISITOR_LOCATIONS: VisitorLocationRecord[] = [
+  {
+    id: 'loc-101',
+    city: 'Dubai',
+    region: 'Dubai',
+    country: 'United Arab Emirates',
+    countryCode: 'AE',
+    flag: '🇦🇪',
+    timestamp: new Date(Date.now() - 4 * 60 * 1000).toISOString()
+  },
+  {
+    id: 'loc-102',
+    city: 'Kuala Lumpur',
+    region: 'Federal Territory',
+    country: 'Malaysia',
+    countryCode: 'MY',
+    flag: '🇲🇾',
+    timestamp: new Date(Date.now() - 18 * 60 * 1000).toISOString()
+  },
+  {
+    id: 'loc-103',
+    city: 'Riyadh',
+    region: 'Riyadh Province',
+    country: 'Saudi Arabia',
+    countryCode: 'SA',
+    flag: '🇸🇦',
+    timestamp: new Date(Date.now() - 35 * 60 * 1000).toISOString()
+  },
+  {
+    id: 'loc-104',
+    city: 'Abu Dhabi',
+    region: 'Abu Dhabi',
+    country: 'United Arab Emirates',
+    countryCode: 'AE',
+    flag: '🇦🇪',
+    timestamp: new Date(Date.now() - 52 * 60 * 1000).toISOString()
+  },
+  {
+    id: 'loc-105',
+    city: 'London',
+    region: 'Greater London',
+    country: 'United Kingdom',
+    countryCode: 'GB',
+    flag: '🇬🇧',
+    timestamp: new Date(Date.now() - 80 * 60 * 1000).toISOString()
+  },
+  {
+    id: 'loc-106',
+    city: 'Jakarta',
+    region: 'DKI Jakarta',
+    country: 'Indonesia',
+    countryCode: 'ID',
+    flag: '🇮🇩',
+    timestamp: new Date(Date.now() - 110 * 60 * 1000).toISOString()
+  },
+  {
+    id: 'loc-107',
+    city: 'Istanbul',
+    region: 'Marmara',
+    country: 'Turkey',
+    countryCode: 'TR',
+    flag: '🇹🇷',
+    timestamp: new Date(Date.now() - 150 * 60 * 1000).toISOString()
+  },
+  {
+    id: 'loc-108',
+    city: 'Singapore',
+    region: 'Central Region',
+    country: 'Singapore',
+    countryCode: 'SG',
+    flag: '🇸🇬',
+    timestamp: new Date(Date.now() - 210 * 60 * 1000).toISOString()
+  },
+  {
+    id: 'loc-109',
+    city: 'Chicago',
+    region: 'Illinois',
+    country: 'United States',
+    countryCode: 'US',
+    flag: '🇺🇸',
+    timestamp: new Date(Date.now() - 290 * 60 * 1000).toISOString()
+  },
+  {
+    id: 'loc-110',
+    city: 'Doha',
+    region: 'Ad Dawhah',
+    country: 'Qatar',
+    countryCode: 'QA',
+    flag: '🇶🇦',
+    timestamp: new Date(Date.now() - 380 * 60 * 1000).toISOString()
+  }
+];
+
+let fallbackVisitorLocations: VisitorLocationRecord[] = JSON.parse(JSON.stringify(INITIAL_VISITOR_LOCATIONS));
+
+export async function getVisitorLocations(): Promise<VisitorLocationRecord[]> {
+  if (db && isConnected) {
+    try {
+      const list = await db.collection('visitor_locations')
+        .find({}, { projection: { _id: 0 } })
+        .sort({ timestamp: -1 })
+        .limit(100)
+        .toArray();
+      if (list && list.length > 0) return list as any[];
+    } catch (e) {
+      console.warn('Error fetching visitor_locations from Mongo, using fallback:', e);
+    }
+  }
+  return fallbackVisitorLocations;
+}
+
+export async function recordVisitorLocation(loc: Omit<VisitorLocationRecord, 'id' | 'timestamp'> & { id?: string; timestamp?: string }): Promise<VisitorLocationRecord> {
+  const newRecord: VisitorLocationRecord = {
+    id: loc.id || `loc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    city: loc.city || 'Unknown City',
+    region: loc.region || '',
+    country: loc.country || 'Unknown Country',
+    countryCode: (loc.countryCode || 'UN').toUpperCase(),
+    flag: loc.flag || '🌐',
+    timestamp: loc.timestamp || new Date().toISOString()
+  };
+
+  if (db && isConnected) {
+    try {
+      await db.collection('visitor_locations').insertOne(newRecord);
+    } catch (e) {
+      console.warn('Error inserting visitor location to Mongo:', e);
+    }
+  }
+
+  fallbackVisitorLocations = [newRecord, ...fallbackVisitorLocations].slice(0, 100);
+  return newRecord;
+}
+
 export async function resetDatabase(): Promise<void> {
   if (db && isConnected) {
     await seedBaselineData();
@@ -387,4 +531,5 @@ export async function resetDatabase(): Promise<void> {
   fallbackRenewals = JSON.parse(JSON.stringify(INITIAL_RENEWALS));
   fallbackAuditLogs = JSON.parse(JSON.stringify(INITIAL_AUDIT_LOGS));
   fallbackInquiries = JSON.parse(JSON.stringify(INITIAL_INQUIRIES));
+  fallbackVisitorLocations = JSON.parse(JSON.stringify(INITIAL_VISITOR_LOCATIONS));
 }
