@@ -2,7 +2,7 @@ import { Resend } from 'resend';
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const NOTIFICATION_EMAIL = process.env.ENGAGEMENT_NOTIFICATION_EMAIL || 'villagecoders7@gmail.com';
-const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'HCPT Enterprise <onboarding@resend.dev>';
+const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'HCPT Enterprise <onboarding@techhalal.com>';
 const DEFAULT_REPLY_TO = 'info@techhalal.com';
 
 const resend = new Resend(RESEND_API_KEY);
