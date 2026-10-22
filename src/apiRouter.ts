@@ -848,17 +848,29 @@ export async function handleApiRequest(
       const now = new Date().toISOString();
 
       if (!conv) {
+        const customerName = customerInfo?.name?.trim();
+        const customerEmail = customerInfo?.email?.trim();
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+        if (!customerName || customerName.length < 2 || !customerEmail || !emailRegex.test(customerEmail)) {
+          sendJson(res, 400, {
+            error: 'Full name and a valid email address are required before starting a chat.',
+            requiredFields: ['name', 'email']
+          });
+          return true;
+        }
+
         const newId = `conv-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
         const newToken = `token-${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
         conv = {
           id: newId,
           sessionToken: newToken,
           customer: {
-            name: customerInfo?.name || 'Website Visitor',
-            email: customerInfo?.email,
+            name: customerName,
+            email: customerEmail.toLowerCase(),
             phone: customerInfo?.phone,
             organization: customerInfo?.organization,
-            isGuest: !customerInfo?.email,
+            isGuest: false,
             visitorLocation: customerInfo?.visitorLocation
           },
           status: 'open',
