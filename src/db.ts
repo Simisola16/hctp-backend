@@ -737,10 +737,10 @@ export async function getSupportConversations(filter?: {
       const list = await db.collection('support_conversations')
         .find(query, { projection: { _id: 0 } })
         .sort({ updatedAt: -1 })
-        .limit(100)
+        .limit(200)
         .toArray();
 
-      if (list && list.length > 0) return list as unknown as SupportConversation[];
+      return list as unknown as SupportConversation[];
     } catch (e) {
       console.warn('Error fetching support_conversations from Mongo, using fallback:', e);
     }
