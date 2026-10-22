@@ -914,6 +914,17 @@ export async function handleApiRequest(
           priority: conv.priority
         }).catch(err => console.warn('Failed to send escalation notification:', err));
 
+        // Add a visible receipt message for the user in thread so they know their message is in the queue
+        const sysNotice: SupportMessage = {
+          id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          conversationId: conv.id,
+          sender: 'system',
+          authorName: 'HCPT Support Queue',
+          text: 'Your message has been delivered to the human support queue. A representative will review it shortly. Click "Switch back to AI" at the top if you would like instant answers from the AI assistant in the meantime.',
+          createdAt: now
+        };
+        await addSupportMessage(conv.id, sysNotice);
+
         sendJson(res, 200, {
           success: true,
           conversationId: conv.id,
@@ -921,7 +932,7 @@ export async function handleApiRequest(
           status: conv.status,
           handlingMode: 'human',
           message: customerMsg,
-          reply: null,
+          reply: sysNotice,
           humanHandlingNotice: 'Your message has been delivered to the HCPT support team. A human representative will reply shortly.'
         });
         return true;
@@ -1075,6 +1086,40 @@ export async function handleApiRequest(
         latestMessage: conv.messages.slice(-1)[0]?.text || 'Visitor requested human assistance',
         priority: 'urgent'
       }).catch(err => console.warn('Failed to dispatch escalation email:', err));
+
+      sendJson(res, 200, { success: true, conversation: updated });
+      return true;
+    }
+
+    // Switch Conversation Back to AI Mode ("Switch back to AI")
+    if (path === '/api/support/return-to-ai' && method === 'POST') {
+      const body = await parseJsonBody<{ conversationId: string; sessionToken: string }>(req);
+      if (!body.conversationId || !body.sessionToken) {
+        sendJson(res, 400, { error: 'Missing conversationId or sessionToken' });
+        return true;
+      }
+
+      const conv = await getSupportConversationByToken(body.conversationId, body.sessionToken);
+      if (!conv) {
+        sendJson(res, 404, { error: 'Conversation not found or invalid session' });
+        return true;
+      }
+
+      const sysMsg: SupportMessage = {
+        id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        conversationId: conv.id,
+        sender: 'system',
+        authorName: 'HCPT System',
+        text: 'Switched back to AI Assistant mode. Feel free to ask any questions about HCPT, our solutions, or Halal certification workflows.',
+        createdAt: new Date().toISOString()
+      };
+      await addSupportMessage(conv.id, sysMsg);
+
+      const updated = await updateSupportConversation(conv.id, {
+        status: 'open',
+        handlingMode: 'ai',
+        priority: 'normal'
+      });
 
       sendJson(res, 200, { success: true, conversation: updated });
       return true;
