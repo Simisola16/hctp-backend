@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
+import crypto from 'crypto';
 import {
   StatusUpdateSchema,
   ContactInquirySchema,
@@ -89,6 +90,44 @@ function sendJson(res: ServerResponse, statusCode: number, data: unknown): void 
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.end(JSON.stringify(data));
+}
+
+const ADMIN_TOKEN_SECRET = process.env.ADMIN_TOKEN_SECRET || 'hcpt_admin_secret_key_2026_secured';
+const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || 'admin').trim();
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || process.env.ENGAGEMENT_NOTIFICATION_EMAIL || 'villagecoders7@gmail.com').trim();
+const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || 'AdminPassword2026!').trim();
+
+export function generateAdminToken(user: string): string {
+  const timestamp = Date.now();
+  const payload = `${user}:${timestamp}`;
+  const signature = crypto.createHmac('sha256', ADMIN_TOKEN_SECRET).update(payload).digest('hex');
+  return Buffer.from(`${payload}:${signature}`).toString('base64');
+}
+
+export function verifyAdminToken(token: string | undefined): boolean {
+  if (!token) return false;
+  try {
+    const raw = Buffer.from(token, 'base64').toString('utf-8');
+    const [user, timestampStr, signature] = raw.split(':');
+    if (!user || !timestampStr || !signature) return false;
+    const expectedSig = crypto.createHmac('sha256', ADMIN_TOKEN_SECRET).update(`${user}:${timestampStr}`).digest('hex');
+    if (signature !== expectedSig) return false;
+    const timestamp = parseInt(timestampStr, 10);
+    // Token valid for 7 days
+    if (Date.now() - timestamp > 7 * 24 * 60 * 60 * 1000) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getBearerToken(req: IncomingMessage): string | undefined {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return undefined;
+  if (authHeader.startsWith('Bearer ')) {
+    return authHeader.substring(7).trim();
+  }
+  return authHeader.trim();
 }
 
 export async function handleApiRequest(
@@ -642,15 +681,66 @@ export async function handleApiRequest(
       return true;
     }
 
-    // 14b. Get All Contact Inquiries (Admin Portal)
+    // 14a. Admin Authentication (Login & Verify)
+    if (path === '/api/admin/login' && method === 'POST') {
+      const body = await parseJsonBody<{ username?: string; email?: string; password?: string }>(req);
+      const identifier = (body.username || body.email || '').trim().toLowerCase();
+      const password = (body.password || '').trim();
+
+      const validIdentifier = (identifier === ADMIN_USERNAME.toLowerCase() || identifier === ADMIN_EMAIL.toLowerCase());
+      const validPassword = (password === ADMIN_PASSWORD);
+
+      if (!validIdentifier || !validPassword) {
+        sendJson(res, 401, {
+          success: false,
+          error: 'Invalid administrative credentials. Access denied.'
+        });
+        return true;
+      }
+
+      const token = generateAdminToken(identifier);
+      sendJson(res, 200, {
+        success: true,
+        token,
+        admin: {
+          username: ADMIN_USERNAME,
+          email: ADMIN_EMAIL,
+          role: 'Super Administrator',
+          authenticatedAt: new Date().toISOString()
+        }
+      });
+      return true;
+    }
+
+    if (path === '/api/admin/verify' && method === 'GET') {
+      const token = getBearerToken(req);
+      if (!verifyAdminToken(token)) {
+        sendJson(res, 401, { success: false, error: 'Unauthorized: Invalid or expired administrative token' });
+        return true;
+      }
+      sendJson(res, 200, { success: true, message: 'Administrative session valid' });
+      return true;
+    }
+
+    // 14b. Get All Contact Inquiries (Admin Portal - Protected)
     if ((path === '/api/contact' || path === '/api/admin/inquiries') && method === 'GET') {
+      const token = getBearerToken(req);
+      if (!verifyAdminToken(token)) {
+        sendJson(res, 401, { error: 'Unauthorized: Administrative authentication required' });
+        return true;
+      }
       const inquiries = await getContactInquiries();
       sendJson(res, 200, inquiries);
       return true;
     }
 
-    // 14c. Update Contact Inquiry Status (Admin Portal)
+    // 14c. Update Contact Inquiry Status (Admin Portal - Protected)
     if (path.startsWith('/api/admin/inquiries/') && method === 'PATCH') {
+      const token = getBearerToken(req);
+      if (!verifyAdminToken(token)) {
+        sendJson(res, 401, { error: 'Unauthorized: Administrative authentication required' });
+        return true;
+      }
       const confirmationId = path.replace('/api/admin/inquiries/', '').trim();
       const body = await parseJsonBody<{ status?: string }>(req);
       if (!body.status) {
@@ -666,8 +756,13 @@ export async function handleApiRequest(
       return true;
     }
 
-    // 14d. Get Visitor Locations (Admin Portal)
+    // 14d. Get Visitor Locations (Admin Portal - Protected)
     if ((path === '/api/visitors/locations' || path === '/api/admin/visitor-locations') && method === 'GET') {
+      const token = getBearerToken(req);
+      if (!verifyAdminToken(token)) {
+        sendJson(res, 401, { error: 'Unauthorized: Administrative authentication required' });
+        return true;
+      }
       const locations = await getVisitorLocations();
       sendJson(res, 200, locations);
       return true;

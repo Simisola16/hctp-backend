@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import http from 'http';
 import { handleApiRequest } from './apiRouter';
 import { initDb } from './db';
