@@ -95,7 +95,7 @@ function sendJson(res: ServerResponse, statusCode: number, data: unknown): void 
 const ADMIN_TOKEN_SECRET = process.env.ADMIN_TOKEN_SECRET || 'hcpt_admin_secret_key_2026_secured';
 const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || 'admin').trim();
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || process.env.ENGAGEMENT_NOTIFICATION_EMAIL || 'villagecoders7@gmail.com').trim();
-const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || 'AdminPassword2026!').trim();
+const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || 'hcpt123').trim();
 
 export function generateAdminToken(user: string): string {
   const timestamp = Date.now();
