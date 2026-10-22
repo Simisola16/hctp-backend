@@ -155,3 +155,93 @@ export async function sendEngagementNotification(inquiry: EngagementFormData): P
     return { success: false, error: err?.message || String(err) };
   }
 }
+
+export async function sendSupportEscalationNotification(params: {
+  conversationId: string;
+  customerName?: string;
+  customerEmail?: string;
+  reason?: string;
+  latestMessage: string;
+  priority?: string;
+}): Promise<{ success: boolean; id?: string; error?: string }> {
+  try {
+    const customerIdentifier = params.customerName || params.customerEmail || 'Website Visitor (Guest)';
+    const escalationReason = params.reason || 'Customer requested human assistance';
+    const mobileLink = `https://techhalal.com/admin/support/mobile?id=${encodeURIComponent(params.conversationId)}`;
+    const desktopLink = `https://techhalal.com/admin/support?id=${encodeURIComponent(params.conversationId)}`;
+
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b; }
+    .container { max-width: 620px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+    .header { background: #006837; color: #ffffff; padding: 24px; text-align: left; }
+    .badge { display: inline-block; padding: 4px 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; background: #064e3b; color: #6ee7b7; border-radius: 9999px; margin-bottom: 8px; border: 1px solid #047857; }
+    .header h1 { margin: 0; font-size: 19px; font-weight: 700; }
+    .content { padding: 24px; font-size: 13px; line-height: 1.6; }
+    .callout { background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 14px 16px; margin: 16px 0; color: #991b1b; }
+    .msg-box { background: #f8fafc; border-left: 4px solid #006837; border-radius: 0 8px 8px 0; padding: 14px 16px; margin: 16px 0; font-style: italic; color: #334155; }
+    .cta-btn { display: inline-block; padding: 12px 24px; background: #006837; color: #ffffff !important; text-decoration: none; border-radius: 8px; font-size: 13px; font-weight: 700; margin: 12px 6px 6px 0; }
+    .cta-sec { display: inline-block; padding: 12px 20px; background: #f1f5f9; color: #334155 !important; text-decoration: none; border-radius: 8px; font-size: 13px; font-weight: 600; margin: 12px 6px 6px 0; border: 1px solid #cbd5e1; }
+    .footer { background: #f8fafc; padding: 16px 24px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #64748b; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <span class="badge">&#9888; Action Required &bull; Human Handoff</span>
+      <h1>HCPT Support Escalation Alert</h1>
+      <p style="margin: 4px 0 0; font-size: 12px; color: #a7f3d0;">A customer conversation requires human administrator intervention.</p>
+    </div>
+
+    <div class="content">
+      <div class="callout">
+        <strong>Escalation Reason:</strong> ${escalationReason}<br/>
+        <strong>Conversation ID:</strong> <code>${params.conversationId}</code><br/>
+        <strong>Customer:</strong> ${customerIdentifier} ${params.customerEmail ? `(${params.customerEmail})` : ''}
+      </div>
+
+      <div style="font-weight: 600; margin-bottom: 4px;">Latest Customer Message:</div>
+      <div class="msg-box">
+        "${params.latestMessage}"
+      </div>
+
+      <p>The AI assistant has paused autonomous responses on this thread. You can take over and reply directly to this customer from your phone or desktop:</p>
+
+      <div style="margin-top: 20px;">
+        <a href="${mobileLink}" class="cta-btn">&#128241; Open Mobile Support Inbox &rarr;</a>
+        <a href="${desktopLink}" class="cta-sec">Open Desktop Inbox</a>
+      </div>
+    </div>
+
+    <div class="footer">
+      Dispatched to <strong>${NOTIFICATION_EMAIL}</strong> &bull; HCPT Real-time Customer Support System
+    </div>
+  </div>
+</body>
+</html>
+    `;
+
+    const { data, error } = await resend.emails.send({
+      from: FROM_EMAIL,
+      to: [NOTIFICATION_EMAIL],
+      subject: `[Support Alert] Human Handoff: ${customerIdentifier} (${params.conversationId})`,
+      html: htmlContent
+    });
+
+    if (error) {
+      console.error('[EmailService] Escalation email error:', error);
+      return { success: false, error: error.message };
+    }
+
+    console.log(`[EmailService] Escalation notification sent for ${params.conversationId}`);
+    return { success: true, id: data?.id };
+  } catch (err: any) {
+    console.error('[EmailService] Failed sending escalation email:', err);
+    return { success: false, error: err?.message || String(err) };
+  }
+}
+

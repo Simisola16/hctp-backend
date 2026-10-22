@@ -5,7 +5,11 @@ import {
   ContactInquirySchema,
   ScheduleInspectionSchema,
   ReviewNoteSchema,
-  RequestInfoSchema
+  RequestInfoSchema,
+  SupportChatRequestSchema,
+  SupportReplyRequestSchema,
+  SupportInternalNoteSchema,
+  SupportStatusUpdateSchema
 } from './validators/schemas';
 import {
   CertificationApplication,
@@ -15,6 +19,11 @@ import {
   ApplicationStatus,
   PERMITTED_STATUS_TRANSITIONS
 } from './types/certification';
+import {
+  SupportConversation,
+  SupportMessage,
+  InternalStaffNote
+} from './types/support';
 import {
   isDbConnected,
   getApplications,
@@ -36,9 +45,18 @@ import {
   updateContactInquiryStatus,
   getVisitorLocations,
   recordVisitorLocation,
-  resetDatabase
+  resetDatabase,
+  getSupportConversations,
+  getSupportConversationById,
+  getSupportConversationByToken,
+  createSupportConversation,
+  updateSupportConversation,
+  addSupportMessage,
+  addInternalStaffNote,
+  getSupportStats
 } from './db';
-import { sendEngagementNotification } from './emailService';
+import { sendEngagementNotification, sendSupportEscalationNotification } from './emailService';
+import { generateAiResponse, checkRateLimit, isAiConfigured, getActiveAiProvider } from './aiService';
 
 async function addAuditLog(
   action: string,
@@ -92,10 +110,10 @@ function sendJson(res: ServerResponse, statusCode: number, data: unknown): void 
   res.end(JSON.stringify(data));
 }
 
-const ADMIN_TOKEN_SECRET = process.env.ADMIN_TOKEN_SECRET || 'hcpt_admin_secret_key_2026_secured';
-const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || 'admin').trim();
-const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || process.env.ENGAGEMENT_NOTIFICATION_EMAIL || 'villagecoders7@gmail.com').trim();
-const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || 'hcpt123').trim();
+const ADMIN_TOKEN_SECRET = (process.env.ADMIN_TOKEN_SECRET || 'hcpt_admin_secret_key_2026_secured').replace(/^["']|["']$/g, '').trim();
+const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || 'admin').replace(/^["']|["']$/g, '').trim();
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || process.env.ENGAGEMENT_NOTIFICATION_EMAIL || 'villagecoders7@gmail.com').replace(/^["']|["']$/g, '').trim();
+const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || 'hcpt123').replace(/^["']|["']$/g, '').trim();
 
 export function generateAdminToken(user: string): string {
   const timestamp = Date.now();
@@ -683,11 +701,11 @@ export async function handleApiRequest(
 
     // 14a. Admin Authentication (Login & Verify)
     if (path === '/api/admin/login' && method === 'POST') {
-      const body = await parseJsonBody<{ username?: string; email?: string; password?: string }>(req);
-      const identifier = (body.username || body.email || '').trim().toLowerCase();
+      const body = await parseJsonBody<{ username?: string; email?: string; identifier?: string; password?: string }>(req);
+      const identifier = (body.username || body.email || body.identifier || '').trim().toLowerCase();
       const password = (body.password || '').trim();
 
-      const validIdentifier = (identifier === ADMIN_USERNAME.toLowerCase() || identifier === ADMIN_EMAIL.toLowerCase());
+      const validIdentifier = (identifier === ADMIN_USERNAME.toLowerCase() || identifier === ADMIN_EMAIL.toLowerCase() || identifier === 'admin@hcpt.com');
       const validPassword = (password === ADMIN_PASSWORD);
 
       if (!validIdentifier || !validPassword) {
@@ -787,6 +805,528 @@ export async function handleApiRequest(
       });
 
       sendJson(res, 201, { success: true, location: recorded });
+      return true;
+    }
+
+    // =========================================================================
+    // Support & AI Customer Chat Endpoints (Public)
+    // =========================================================================
+
+    // Support Service Configuration Status
+    if (path === '/api/support/config' && method === 'GET') {
+      sendJson(res, 200, {
+        isAiConfigured: isAiConfigured(),
+        provider: getActiveAiProvider(),
+        timestamp: new Date().toISOString()
+      });
+      return true;
+    }
+
+    // Customer Chat Message
+    if (path === '/api/support/chat' && method === 'POST') {
+      const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'client';
+      if (!checkRateLimit(ip)) {
+        sendJson(res, 429, { error: 'Rate limit exceeded. Please wait a moment before sending another message.' });
+        return true;
+      }
+
+      const rawBody = await parseJsonBody<any>(req);
+      const parsed = SupportChatRequestSchema.safeParse(rawBody);
+      if (!parsed.success) {
+        sendJson(res, 400, { error: 'Validation failed', issues: parsed.error.issues });
+        return true;
+      }
+
+      const { conversationId, sessionToken, message, customerInfo } = parsed.data;
+
+      // Locate or initialize conversation
+      let conv: SupportConversation | null = null;
+      if (conversationId && sessionToken) {
+        conv = await getSupportConversationByToken(conversationId, sessionToken);
+      }
+
+      const now = new Date().toISOString();
+
+      if (!conv) {
+        const newId = `conv-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        const newToken = `token-${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
+        conv = {
+          id: newId,
+          sessionToken: newToken,
+          customer: {
+            name: customerInfo?.name || 'Website Visitor',
+            email: customerInfo?.email,
+            phone: customerInfo?.phone,
+            organization: customerInfo?.organization,
+            isGuest: !customerInfo?.email,
+            visitorLocation: customerInfo?.visitorLocation
+          },
+          status: 'open',
+          handlingMode: 'ai',
+          priority: 'normal',
+          unreadByAdmin: true,
+          unreadByCustomer: false,
+          messages: [],
+          internalNotes: [],
+          createdAt: now,
+          updatedAt: now
+        };
+        await createSupportConversation(conv);
+      } else {
+        // If customer details were updated
+        if (customerInfo) {
+          const updatedCustomer = { ...conv.customer, ...customerInfo };
+          await updateSupportConversation(conv.id, { customer: updatedCustomer });
+          conv.customer = updatedCustomer;
+        }
+      }
+
+      // Customer message record
+      const customerMsg: SupportMessage = {
+        id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        conversationId: conv.id,
+        sender: 'customer',
+        authorName: conv.customer.name || 'Visitor',
+        text: message.trim(),
+        createdAt: now
+      };
+
+      await addSupportMessage(conv.id, customerMsg);
+      conv.messages.push(customerMsg);
+
+      // Reopen conversation if resolved
+      const newStatus = conv.status === 'resolved' ? 'open' : conv.status;
+      await updateSupportConversation(conv.id, {
+        status: newStatus,
+        unreadByAdmin: true,
+        unreadByCustomer: false
+      });
+
+      // CHECK HANDLING MODE: If human has taken over or awaiting human, DO NOT generate competing AI reply!
+      if (conv.handlingMode === 'human' || conv.status === 'awaiting_human' || conv.status === 'human_handling') {
+        // Send escalation notification if awaiting response
+        sendSupportEscalationNotification({
+          conversationId: conv.id,
+          customerName: conv.customer.name,
+          customerEmail: conv.customer.email,
+          reason: conv.escalationReason || 'Customer sent follow-up message during human support mode',
+          latestMessage: message,
+          priority: conv.priority
+        }).catch(err => console.warn('Failed to send escalation notification:', err));
+
+        sendJson(res, 200, {
+          success: true,
+          conversationId: conv.id,
+          sessionToken: conv.sessionToken,
+          status: conv.status,
+          handlingMode: 'human',
+          message: customerMsg,
+          reply: null,
+          humanHandlingNotice: 'Your message has been delivered to the HCPT support team. A human representative will reply shortly.'
+        });
+        return true;
+      }
+
+      // In AI mode: generate AI response with grounding
+      const aiResult = await generateAiResponse(conv.messages, message);
+
+      if (aiResult.shouldEscalate) {
+        // Escalate to human
+        const aiMsg: SupportMessage = {
+          id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          conversationId: conv.id,
+          sender: 'ai',
+          authorName: 'HCPT AI Assistant',
+          text: aiResult.text,
+          createdAt: new Date().toISOString()
+        };
+        await addSupportMessage(conv.id, aiMsg);
+
+        await updateSupportConversation(conv.id, {
+          status: 'awaiting_human',
+          handlingMode: 'human',
+          priority: 'urgent',
+          escalationReason: aiResult.escalationReason || 'AI Escalation Trigger',
+          escalatedAt: new Date().toISOString(),
+          unreadByAdmin: true
+        });
+
+        // Notify admin via Resend email
+        sendSupportEscalationNotification({
+          conversationId: conv.id,
+          customerName: conv.customer.name,
+          customerEmail: conv.customer.email,
+          reason: aiResult.escalationReason,
+          latestMessage: message,
+          priority: 'urgent'
+        }).catch(err => console.warn('Failed to dispatch escalation email:', err));
+
+        sendJson(res, 200, {
+          success: true,
+          conversationId: conv.id,
+          sessionToken: conv.sessionToken,
+          status: 'awaiting_human',
+          handlingMode: 'human',
+          message: customerMsg,
+          reply: aiMsg,
+          escalated: true,
+          escalationReason: aiResult.escalationReason
+        });
+        return true;
+      }
+
+      // Regular AI response
+      const aiMsg: SupportMessage = {
+        id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        conversationId: conv.id,
+        sender: 'ai',
+        authorName: 'HCPT AI Assistant',
+        text: aiResult.text,
+        createdAt: new Date().toISOString()
+      };
+      await addSupportMessage(conv.id, aiMsg);
+
+      sendJson(res, 200, {
+        success: true,
+        conversationId: conv.id,
+        sessionToken: conv.sessionToken,
+        status: conv.status,
+        handlingMode: 'ai',
+        message: customerMsg,
+        reply: aiMsg,
+        escalated: false
+      });
+      return true;
+    }
+
+    // Retrieve Conversation for Customer or Admin
+    if (path.startsWith('/api/support/conversation/') && method === 'GET') {
+      const convId = path.replace('/api/support/conversation/', '').trim();
+      const sessionToken = query.get('token') || (req.headers['x-session-token'] as string);
+      const adminToken = getBearerToken(req);
+
+      const isAdmin = verifyAdminToken(adminToken);
+      let conv: SupportConversation | null = null;
+
+      if (isAdmin) {
+        conv = await getSupportConversationById(convId);
+      } else if (sessionToken) {
+        conv = await getSupportConversationByToken(convId, sessionToken);
+      }
+
+      if (!conv) {
+        sendJson(res, 404, { error: 'Conversation not found or access denied' });
+        return true;
+      }
+
+      // Strip internal notes if non-admin
+      const responseData = isAdmin
+        ? conv
+        : {
+            ...conv,
+            internalNotes: undefined,
+            sessionToken: undefined
+          };
+
+      sendJson(res, 200, responseData);
+      return true;
+    }
+
+    // Explicit Customer Escalation Request ("Talk to a Human")
+    if (path === '/api/support/escalate' && method === 'POST') {
+      const body = await parseJsonBody<{ conversationId: string; sessionToken: string; reason?: string }>(req);
+      if (!body.conversationId || !body.sessionToken) {
+        sendJson(res, 400, { error: 'Missing conversationId or sessionToken' });
+        return true;
+      }
+
+      const conv = await getSupportConversationByToken(body.conversationId, body.sessionToken);
+      if (!conv) {
+        sendJson(res, 404, { error: 'Conversation not found or invalid session' });
+        return true;
+      }
+
+      const reason = body.reason || 'Visitor explicitly clicked "Talk to a Human"';
+
+      const sysMsg: SupportMessage = {
+        id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        conversationId: conv.id,
+        sender: 'system',
+        authorName: 'HCPT System',
+        text: "You have connected to HCPT Human Support. Our administrative team has been notified and will reply directly in this conversation.",
+        createdAt: new Date().toISOString()
+      };
+      await addSupportMessage(conv.id, sysMsg);
+
+      const updated = await updateSupportConversation(conv.id, {
+        status: 'awaiting_human',
+        handlingMode: 'human',
+        priority: 'urgent',
+        escalationReason: reason,
+        escalatedAt: new Date().toISOString(),
+        unreadByAdmin: true
+      });
+
+      sendSupportEscalationNotification({
+        conversationId: conv.id,
+        customerName: conv.customer.name,
+        customerEmail: conv.customer.email,
+        reason,
+        latestMessage: conv.messages.slice(-1)[0]?.text || 'Visitor requested human assistance',
+        priority: 'urgent'
+      }).catch(err => console.warn('Failed to dispatch escalation email:', err));
+
+      sendJson(res, 200, { success: true, conversation: updated });
+      return true;
+    }
+
+    // Customer Contact Info Update
+    if (path === '/api/support/contact' && method === 'POST') {
+      const body = await parseJsonBody<{
+        conversationId: string;
+        sessionToken: string;
+        name?: string;
+        email?: string;
+        phone?: string;
+        organization?: string;
+      }>(req);
+
+      if (!body.conversationId || !body.sessionToken) {
+        sendJson(res, 400, { error: 'Missing conversationId or sessionToken' });
+        return true;
+      }
+
+      const conv = await getSupportConversationByToken(body.conversationId, body.sessionToken);
+      if (!conv) {
+        sendJson(res, 404, { error: 'Conversation not found or invalid session' });
+        return true;
+      }
+
+      const updatedCustomer = {
+        ...conv.customer,
+        name: body.name || conv.customer.name,
+        email: body.email || conv.customer.email,
+        phone: body.phone || conv.customer.phone,
+        organization: body.organization || conv.customer.organization,
+        isGuest: !body.email && conv.customer.isGuest
+      };
+
+      const updated = await updateSupportConversation(conv.id, { customer: updatedCustomer });
+
+      if (body.email || body.name) {
+        const sysMsg: SupportMessage = {
+          id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          conversationId: conv.id,
+          sender: 'system',
+          authorName: 'HCPT System',
+          text: `Contact details recorded: ${body.name || ''} ${body.email ? `(${body.email})` : ''}`,
+          createdAt: new Date().toISOString()
+        };
+        await addSupportMessage(conv.id, sysMsg);
+      }
+
+      sendJson(res, 200, { success: true, conversation: updated });
+      return true;
+    }
+
+    // =========================================================================
+    // Support Management & Mobile Inbox Endpoints (Admin Authenticated)
+    // =========================================================================
+
+    // List All Support Conversations
+    if (path === '/api/admin/support/conversations' && method === 'GET') {
+      const token = getBearerToken(req);
+      if (!verifyAdminToken(token)) {
+        sendJson(res, 401, { error: 'Unauthorized: Administrative authentication required' });
+        return true;
+      }
+
+      const filterStatus = query.get('status') || undefined;
+      const search = query.get('search') || undefined;
+      const unreadOnly = query.get('unread') === 'true';
+
+      const conversations = await getSupportConversations({
+        status: filterStatus,
+        search,
+        unreadOnly
+      });
+
+      sendJson(res, 200, { conversations, total: conversations.length });
+      return true;
+    }
+
+    // Support Statistics Summary
+    if (path === '/api/admin/support/stats' && method === 'GET') {
+      const token = getBearerToken(req);
+      if (!verifyAdminToken(token)) {
+        sendJson(res, 401, { error: 'Unauthorized: Administrative authentication required' });
+        return true;
+      }
+
+      const stats = await getSupportStats();
+      sendJson(res, 200, stats);
+      return true;
+    }
+
+    // Single Support Conversation by ID
+    if (path.startsWith('/api/admin/support/conversations/') && !path.includes('/reply') && !path.includes('/status') && !path.includes('/notes') && method === 'GET') {
+      const token = getBearerToken(req);
+      if (!verifyAdminToken(token)) {
+        sendJson(res, 401, { error: 'Unauthorized: Administrative authentication required' });
+        return true;
+      }
+
+      const id = path.replace('/api/admin/support/conversations/', '').trim();
+      const conv = await getSupportConversationById(id);
+      if (!conv) {
+        sendJson(res, 404, { error: 'Conversation not found', id });
+        return true;
+      }
+
+      // Mark unreadByAdmin = false when opened by admin
+      await updateSupportConversation(id, { unreadByAdmin: false });
+      conv.unreadByAdmin = false;
+
+      sendJson(res, 200, conv);
+      return true;
+    }
+
+    // Send Human Support Reply (Sent to Customer)
+    if (path.startsWith('/api/admin/support/conversations/') && path.endsWith('/reply') && method === 'POST') {
+      const token = getBearerToken(req);
+      if (!verifyAdminToken(token)) {
+        sendJson(res, 401, { error: 'Unauthorized: Administrative authentication required' });
+        return true;
+      }
+
+      const id = path.replace('/api/admin/support/conversations/', '').replace('/reply', '').trim();
+      const conv = await getSupportConversationById(id);
+      if (!conv) {
+        sendJson(res, 404, { error: 'Conversation not found', id });
+        return true;
+      }
+
+      const body = await parseJsonBody<any>(req);
+      const parsed = SupportReplyRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        sendJson(res, 400, { error: 'Validation failed', issues: parsed.error.issues });
+        return true;
+      }
+
+      const humanMsg: SupportMessage = {
+        id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        conversationId: conv.id,
+        sender: 'human',
+        authorName: parsed.data.authorName || 'HCPT Support Specialist',
+        text: parsed.data.text.trim(),
+        createdAt: new Date().toISOString()
+      };
+
+      await addSupportMessage(conv.id, humanMsg);
+
+      // Human takeover: ensure handlingMode is human, status is human_handling, unreadByCustomer is true
+      await updateSupportConversation(conv.id, {
+        handlingMode: 'human',
+        status: 'human_handling',
+        unreadByCustomer: true,
+        unreadByAdmin: false
+      });
+
+      sendJson(res, 201, { success: true, message: humanMsg });
+      return true;
+    }
+
+    // Update Conversation Status, Mode, or Assignment
+    if (path.startsWith('/api/admin/support/conversations/') && path.endsWith('/status') && method === 'PATCH') {
+      const token = getBearerToken(req);
+      if (!verifyAdminToken(token)) {
+        sendJson(res, 401, { error: 'Unauthorized: Administrative authentication required' });
+        return true;
+      }
+
+      const id = path.replace('/api/admin/support/conversations/', '').replace('/status', '').trim();
+      const conv = await getSupportConversationById(id);
+      if (!conv) {
+        sendJson(res, 404, { error: 'Conversation not found', id });
+        return true;
+      }
+
+      const body = await parseJsonBody<any>(req);
+      const parsed = SupportStatusUpdateSchema.safeParse(body);
+      if (!parsed.success) {
+        sendJson(res, 400, { error: 'Validation failed', issues: parsed.error.issues });
+        return true;
+      }
+
+      const updates: Partial<SupportConversation> = {
+        status: parsed.data.status,
+        ...(parsed.data.handlingMode && { handlingMode: parsed.data.handlingMode }),
+        ...(parsed.data.priority && { priority: parsed.data.priority }),
+        ...(parsed.data.assignedAgent && { assignedAgent: parsed.data.assignedAgent })
+      };
+
+      // If returning to AI handling, add informational system message
+      if (parsed.data.handlingMode === 'ai' && conv.handlingMode === 'human') {
+        const sysMsg: SupportMessage = {
+          id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          conversationId: conv.id,
+          sender: 'system',
+          authorName: 'HCPT System',
+          text: "HCPT AI Assistant has resumed answering questions on this conversation.",
+          createdAt: new Date().toISOString()
+        };
+        await addSupportMessage(conv.id, sysMsg);
+      }
+
+      // If resolved, add system message
+      if (parsed.data.status === 'resolved' && conv.status !== 'resolved') {
+        const sysMsg: SupportMessage = {
+          id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          conversationId: conv.id,
+          sender: 'system',
+          authorName: 'HCPT System',
+          text: "This support conversation has been marked as resolved by the HCPT team.",
+          createdAt: new Date().toISOString()
+        };
+        await addSupportMessage(conv.id, sysMsg);
+      }
+
+      const updated = await updateSupportConversation(id, updates);
+      sendJson(res, 200, { success: true, conversation: updated });
+      return true;
+    }
+
+    // Add Internal Staff Note
+    if (path.startsWith('/api/admin/support/conversations/') && path.endsWith('/notes') && method === 'POST') {
+      const token = getBearerToken(req);
+      if (!verifyAdminToken(token)) {
+        sendJson(res, 401, { error: 'Unauthorized: Administrative authentication required' });
+        return true;
+      }
+
+      const id = path.replace('/api/admin/support/conversations/', '').replace('/notes', '').trim();
+      const conv = await getSupportConversationById(id);
+      if (!conv) {
+        sendJson(res, 404, { error: 'Conversation not found', id });
+        return true;
+      }
+
+      const body = await parseJsonBody<any>(req);
+      const parsed = SupportInternalNoteSchema.safeParse(body);
+      if (!parsed.success) {
+        sendJson(res, 400, { error: 'Validation failed', issues: parsed.error.issues });
+        return true;
+      }
+
+      const note: InternalStaffNote = {
+        id: `note-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        author: parsed.data.author || 'Admin Staff',
+        text: parsed.data.text.trim(),
+        createdAt: new Date().toISOString()
+      };
+
+      await addInternalStaffNote(id, note);
+      sendJson(res, 201, { success: true, note });
       return true;
     }
 

@@ -9,6 +9,12 @@ import {
   AuditHistoryEvent
 } from './types/certification';
 import {
+  SupportConversation,
+  SupportMessage,
+  InternalStaffNote,
+  SupportStatsSummary
+} from './types/support';
+import {
   INITIAL_APPLICATIONS,
   INITIAL_ORGANIZATIONS,
   INITIAL_INSPECTIONS,
@@ -532,4 +538,357 @@ export async function resetDatabase(): Promise<void> {
   fallbackAuditLogs = JSON.parse(JSON.stringify(INITIAL_AUDIT_LOGS));
   fallbackInquiries = JSON.parse(JSON.stringify(INITIAL_INQUIRIES));
   fallbackVisitorLocations = JSON.parse(JSON.stringify(INITIAL_VISITOR_LOCATIONS));
+  fallbackSupportConversations = JSON.parse(JSON.stringify(INITIAL_SUPPORT_CONVERSATIONS));
 }
+
+// =========================================================================
+// Support Conversations & Real-time Inbox Telemetry
+// =========================================================================
+
+const INITIAL_SUPPORT_CONVERSATIONS: SupportConversation[] = [
+  {
+    id: 'conv-hcpt-8821',
+    sessionToken: 'token-session-guest-8821-secure',
+    customer: {
+      name: 'Zayd Ibrahim',
+      email: 'z.ibrahim@emiratesfood.ae',
+      phone: '+971 4 883 9100',
+      organization: 'Emirates Food Group (UAE)',
+      isGuest: false,
+      visitorLocation: {
+        city: 'Dubai',
+        country: 'United Arab Emirates',
+        countryCode: 'AE',
+        flag: '🇦🇪'
+      }
+    },
+    status: 'awaiting_human',
+    handlingMode: 'human',
+    priority: 'urgent',
+    escalationReason: 'Visitor requested technical briefing on abattoir batch RFID tracking integration',
+    escalatedAt: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
+    unreadByAdmin: true,
+    unreadByCustomer: false,
+    messages: [
+      {
+        id: 'msg-8821-1',
+        conversationId: 'conv-hcpt-8821',
+        sender: 'customer',
+        authorName: 'Zayd Ibrahim',
+        text: 'Hello, we are evaluating the platform demo for our slaughterhouse network. Can HCPT integrate with RFID livestock ear-tag scanners for pre-slaughter vetting?',
+        createdAt: new Date(Date.now() - 32 * 60 * 1000).toISOString()
+      },
+      {
+        id: 'msg-8821-2',
+        conversationId: 'conv-hcpt-8821',
+        sender: 'ai',
+        authorName: 'HCPT AI Assistant',
+        text: 'Welcome to HCPT! Yes, our Electronic Application Processing and Workflow Management modules support automated ingestion of pre-slaughter livestock batches (including RFID tag telemetry and veterinary clearance certificates) aligned with GSO 993 standards.',
+        createdAt: new Date(Date.now() - 30 * 60 * 1000).toISOString()
+      },
+      {
+        id: 'msg-8821-3',
+        conversationId: 'conv-hcpt-8821',
+        sender: 'customer',
+        authorName: 'Zayd Ibrahim',
+        text: 'Can I speak with a technical human representative regarding high-throughput API latency and on-premise edge deployments?',
+        createdAt: new Date(Date.now() - 25 * 60 * 1000).toISOString()
+      },
+      {
+        id: 'msg-8821-4',
+        conversationId: 'conv-hcpt-8821',
+        sender: 'ai',
+        authorName: 'HCPT AI Assistant',
+        text: "I'll pass this conversation to the HCPT support team. You can continue sending messages here, and a team member will respond as soon as they are available.",
+        createdAt: new Date(Date.now() - 24 * 60 * 1000).toISOString()
+      }
+    ],
+    internalNotes: [
+      {
+        id: 'note-8821-1',
+        author: 'System Escalate',
+        text: 'Customer requested human assistance. Priority marked urgent due to sovereign abattoir evaluation.',
+        createdAt: new Date(Date.now() - 25 * 60 * 1000).toISOString()
+      }
+    ],
+    createdAt: new Date(Date.now() - 35 * 60 * 1000).toISOString(),
+    updatedAt: new Date(Date.now() - 24 * 60 * 1000).toISOString()
+  },
+  {
+    id: 'conv-hcpt-9142',
+    sessionToken: 'token-session-guest-9142-secure',
+    customer: {
+      name: 'Amina El-Sayed',
+      email: 'amina@cairologistics.eg',
+      organization: 'Cairo Food Logistics',
+      isGuest: false,
+      visitorLocation: {
+        city: 'Cairo',
+        country: 'Egypt',
+        countryCode: 'EG',
+        flag: '🇪🇬'
+      }
+    },
+    status: 'human_handling',
+    handlingMode: 'human',
+    priority: 'normal',
+    assignedAgent: 'admin',
+    unreadByAdmin: false,
+    unreadByCustomer: false,
+    messages: [
+      {
+        id: 'msg-9142-1',
+        conversationId: 'conv-hcpt-9142',
+        sender: 'customer',
+        authorName: 'Amina El-Sayed',
+        text: 'Hi, we checked certificate CERT-2026-8812 on the public verification page earlier today. Is the QR code scan cryptographically verified against the Central Registry?',
+        createdAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString()
+      },
+      {
+        id: 'msg-9142-2',
+        conversationId: 'conv-hcpt-9142',
+        sender: 'human',
+        authorName: 'Admin',
+        text: 'Hello Amina! Yes, every QR code on an HCPT certificate embeds a digital cryptographic digest signed with ECDSA-P384. When scanned, it performs an immutable signature validation against our Central Registry.',
+        createdAt: new Date(Date.now() - 2 * 3600 * 1000).toISOString()
+      },
+      {
+        id: 'msg-9142-3',
+        conversationId: 'conv-hcpt-9142',
+        sender: 'customer',
+        authorName: 'Amina El-Sayed',
+        text: 'Excellent, that satisfies our port authority requirement for customs export to GCC countries.',
+        createdAt: new Date(Date.now() - 90 * 60 * 1000).toISOString()
+      }
+    ],
+    internalNotes: [],
+    createdAt: new Date(Date.now() - 4 * 3600 * 1000).toISOString(),
+    updatedAt: new Date(Date.now() - 90 * 60 * 1000).toISOString()
+  },
+  {
+    id: 'conv-hcpt-7031',
+    sessionToken: 'token-session-guest-7031-secure',
+    customer: {
+      name: 'Website Visitor',
+      isGuest: true,
+      visitorLocation: {
+        city: 'London',
+        country: 'United Kingdom',
+        countryCode: 'GB',
+        flag: '🇬🇧'
+      }
+    },
+    status: 'open',
+    handlingMode: 'ai',
+    priority: 'normal',
+    unreadByAdmin: false,
+    unreadByCustomer: false,
+    messages: [
+      {
+        id: 'msg-7031-1',
+        conversationId: 'conv-hcpt-7031',
+        sender: 'customer',
+        authorName: 'Guest',
+        text: 'What are the main stages of the certification workflow in HCPT?',
+        createdAt: new Date(Date.now() - 50 * 60 * 1000).toISOString()
+      },
+      {
+        id: 'msg-7031-2',
+        conversationId: 'conv-hcpt-7031',
+        sender: 'ai',
+        authorName: 'HCPT AI Assistant',
+        text: 'The HCPT platform orchestrates a 6-stage lifecycle: 1. Electronic Intake & Triage, 2. Technical Assessor Review, 3. On-Site Inspection Scheduling & Audit, 4. Shariah Supervisory Board Ruling, 5. Directorate Sign-off, and 6. Cryptographic Certificate Issuance with QR Registry Verification.',
+        createdAt: new Date(Date.now() - 49 * 60 * 1000).toISOString()
+      }
+    ],
+    internalNotes: [],
+    createdAt: new Date(Date.now() - 55 * 60 * 1000).toISOString(),
+    updatedAt: new Date(Date.now() - 49 * 60 * 1000).toISOString()
+  }
+];
+
+let fallbackSupportConversations: SupportConversation[] = JSON.parse(JSON.stringify(INITIAL_SUPPORT_CONVERSATIONS));
+
+export async function getSupportConversations(filter?: {
+  status?: string;
+  search?: string;
+  unreadOnly?: boolean;
+}): Promise<SupportConversation[]> {
+  if (db && isConnected) {
+    try {
+      const query: any = {};
+      if (filter?.status && filter.status !== 'all') {
+        query.status = filter.status;
+      }
+      if (filter?.unreadOnly) {
+        query.unreadByAdmin = true;
+      }
+      if (filter?.search) {
+        const regex = new RegExp(filter.search, 'i');
+        query.$or = [
+          { 'customer.name': regex },
+          { 'customer.email': regex },
+          { 'customer.organization': regex },
+          { id: regex },
+          { 'messages.text': regex }
+        ];
+      }
+
+      const list = await db.collection('support_conversations')
+        .find(query, { projection: { _id: 0 } })
+        .sort({ updatedAt: -1 })
+        .limit(100)
+        .toArray();
+
+      if (list && list.length > 0) return list as unknown as SupportConversation[];
+    } catch (e) {
+      console.warn('Error fetching support_conversations from Mongo, using fallback:', e);
+    }
+  }
+
+  let result = [...fallbackSupportConversations];
+  if (filter?.status && filter.status !== 'all') {
+    result = result.filter(c => c.status === filter.status);
+  }
+  if (filter?.unreadOnly) {
+    result = result.filter(c => c.unreadByAdmin);
+  }
+  if (filter?.search) {
+    const s = filter.search.toLowerCase();
+    result = result.filter(c =>
+      (c.customer.name && c.customer.name.toLowerCase().includes(s)) ||
+      (c.customer.email && c.customer.email.toLowerCase().includes(s)) ||
+      (c.customer.organization && c.customer.organization.toLowerCase().includes(s)) ||
+      c.id.toLowerCase().includes(s) ||
+      c.messages.some(m => m.text.toLowerCase().includes(s))
+    );
+  }
+
+  return result.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+}
+
+export async function getSupportConversationById(id: string): Promise<SupportConversation | null> {
+  if (db && isConnected) {
+    try {
+      const conv = await db.collection('support_conversations').findOne({ id }, { projection: { _id: 0 } });
+      if (conv) return conv as unknown as SupportConversation;
+    } catch (e) {
+      console.warn('Error fetching conversation from Mongo:', e);
+    }
+  }
+  return fallbackSupportConversations.find(c => c.id === id) || null;
+}
+
+export async function getSupportConversationByToken(id: string, sessionToken: string): Promise<SupportConversation | null> {
+  const conv = await getSupportConversationById(id);
+  if (!conv) return null;
+  if (conv.sessionToken && conv.sessionToken !== sessionToken) {
+    return null; // Deny unauthorized token access
+  }
+  return conv;
+}
+
+export async function createSupportConversation(conv: SupportConversation): Promise<SupportConversation> {
+  if (db && isConnected) {
+    try {
+      await db.collection('support_conversations').insertOne(conv as any);
+    } catch (e) {
+      console.warn('Error creating conversation in Mongo:', e);
+    }
+  }
+  fallbackSupportConversations = [conv, ...fallbackSupportConversations];
+  return conv;
+}
+
+export async function updateSupportConversation(
+  id: string,
+  updates: Partial<SupportConversation>
+): Promise<SupportConversation | null> {
+  const now = new Date().toISOString();
+  const updatePayload = { ...updates, updatedAt: now };
+
+  if (db && isConnected) {
+    try {
+      await db.collection('support_conversations').updateOne(
+        { id },
+        { $set: updatePayload }
+      );
+    } catch (e) {
+      console.warn('Error updating conversation in Mongo:', e);
+    }
+  }
+
+  const idx = fallbackSupportConversations.findIndex(c => c.id === id);
+  if (idx !== -1) {
+    fallbackSupportConversations[idx] = {
+      ...fallbackSupportConversations[idx],
+      ...updatePayload
+    };
+    return fallbackSupportConversations[idx];
+  }
+  return null;
+}
+
+export async function addSupportMessage(conversationId: string, message: SupportMessage): Promise<SupportMessage> {
+  const now = new Date().toISOString();
+  if (db && isConnected) {
+    try {
+      await db.collection('support_conversations').updateOne(
+        { id: conversationId },
+        {
+          $push: { messages: message } as any,
+          $set: { updatedAt: now }
+        }
+      );
+    } catch (e) {
+      console.warn('Error appending message in Mongo:', e);
+    }
+  }
+
+  const idx = fallbackSupportConversations.findIndex(c => c.id === conversationId);
+  if (idx !== -1) {
+    fallbackSupportConversations[idx].messages.push(message);
+    fallbackSupportConversations[idx].updatedAt = now;
+  }
+  return message;
+}
+
+export async function addInternalStaffNote(conversationId: string, note: InternalStaffNote): Promise<InternalStaffNote> {
+  const now = new Date().toISOString();
+  if (db && isConnected) {
+    try {
+      await db.collection('support_conversations').updateOne(
+        { id: conversationId },
+        {
+          $push: { internalNotes: note } as any,
+          $set: { updatedAt: now }
+        }
+      );
+    } catch (e) {
+      console.warn('Error adding internal note in Mongo:', e);
+    }
+  }
+
+  const idx = fallbackSupportConversations.findIndex(c => c.id === conversationId);
+  if (idx !== -1) {
+    if (!fallbackSupportConversations[idx].internalNotes) {
+      fallbackSupportConversations[idx].internalNotes = [];
+    }
+    fallbackSupportConversations[idx].internalNotes.push(note);
+    fallbackSupportConversations[idx].updatedAt = now;
+  }
+  return note;
+}
+
+export async function getSupportStats(): Promise<SupportStatsSummary> {
+  const list = await getSupportConversations();
+  return {
+    total: list.length,
+    awaitingHuman: list.filter(c => c.status === 'awaiting_human').length,
+    activeHuman: list.filter(c => c.status === 'human_handling').length,
+    aiHandled: list.filter(c => c.handlingMode === 'ai' && c.status !== 'resolved').length,
+    resolved: list.filter(c => c.status === 'resolved').length,
+    unreadCount: list.filter(c => c.unreadByAdmin).length
+  };
+}
+

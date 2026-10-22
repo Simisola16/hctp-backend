@@ -53,3 +53,40 @@ export const RequestInfoSchema = z.object({
   message: z.string().min(10, 'Instructions must be at least 10 characters.'),
   requestedBy: z.string().min(2, 'Reviewer identity is required.')
 });
+
+export const SupportChatRequestSchema = z.object({
+  conversationId: z.string().optional(),
+  sessionToken: z.string().optional(),
+  message: z.string().min(1, 'Message cannot be empty.').max(1500, 'Message is too long (max 1500 characters).'),
+  customerInfo: z.object({
+    name: z.string().max(100).optional(),
+    email: z.string().email().optional(),
+    phone: z.string().max(50).optional(),
+    organization: z.string().max(100).optional(),
+    visitorLocation: z.object({
+      city: z.string().optional(),
+      region: z.string().optional(),
+      country: z.string().optional(),
+      countryCode: z.string().optional(),
+      flag: z.string().optional()
+    }).optional()
+  }).optional()
+});
+
+export const SupportReplyRequestSchema = z.object({
+  text: z.string().min(1, 'Reply cannot be empty.').max(2500, 'Reply exceeds maximum length of 2500 characters.'),
+  authorName: z.string().optional()
+});
+
+export const SupportInternalNoteSchema = z.object({
+  text: z.string().min(1, 'Note cannot be empty.').max(2000, 'Note exceeds maximum length.'),
+  author: z.string().optional()
+});
+
+export const SupportStatusUpdateSchema = z.object({
+  status: z.enum(['open', 'awaiting_human', 'human_handling', 'resolved']),
+  handlingMode: z.enum(['ai', 'human']).optional(),
+  priority: z.enum(['normal', 'high', 'urgent']).optional(),
+  assignedAgent: z.string().optional()
+});
+
