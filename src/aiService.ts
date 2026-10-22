@@ -1,8 +1,8 @@
 import type { SupportMessage } from './types/support';
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
-const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
+const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').replace(/^["']|["']$/g, '').trim();
+const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').replace(/^["']|["']$/g, '').trim();
+const GROQ_API_KEY = (process.env.GROQ_API_KEY || '').replace(/^["']|["']$/g, '').trim();
 
 // Rate limiting cache (IP/Session -> timestamps)
 const rateLimitMap = new Map<string, number[]>();
@@ -149,36 +149,44 @@ export async function generateAiResponse(
         }
       ];
 
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            systemInstruction: {
-              parts: [{ text: HCPT_SYSTEM_INSTRUCTION }]
-            },
-            contents,
-            generationConfig: {
-              temperature: 0.3,
-              maxOutputTokens: 500
+      const modelsToTry = ['gemini-3.5-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+      for (const modelName of modelsToTry) {
+        try {
+          const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-goog-api-key': GEMINI_API_KEY
+              },
+              body: JSON.stringify({
+                systemInstruction: {
+                  parts: [{ text: HCPT_SYSTEM_INSTRUCTION }]
+                },
+                contents,
+                generationConfig: {
+                  temperature: 0.3,
+                  maxOutputTokens: 500
+                }
+              }),
+              signal: AbortSignal.timeout(12000)
             }
-          }),
-          signal: AbortSignal.timeout(12000)
-        }
-      );
+          );
 
-      if (res.ok) {
-        const data: any = await res.json();
-        const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (candidateText && candidateText.trim().length > 0) {
-          return {
-            text: candidateText.trim(),
-            shouldEscalate: false
-          };
+          if (res.ok) {
+            const data: any = await res.json();
+            const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (candidateText && candidateText.trim().length > 0) {
+              return {
+                text: candidateText.trim(),
+                shouldEscalate: false
+              };
+            }
+          }
+        } catch (geminiErr) {
+          console.warn(`[AI Service] Attempt with ${modelName} failed:`, geminiErr);
         }
-      } else {
-        console.warn('[AI Service] Gemini error response:', res.status, await res.text());
       }
     }
 
