@@ -16,7 +16,7 @@ const server = http.createServer(async (req, res) => {
     res.statusCode = 204;
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-session-token, X-Session-Token, *');
     res.end();
     return;
   }
